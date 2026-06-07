@@ -17,7 +17,7 @@ WORKDIR /app
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-scripts
 
-FROM php:8.3-cli-alpine
+FROM php:8.4-cli-alpine
 
 WORKDIR /var/www/html
 
@@ -31,7 +31,8 @@ COPY docker/entrypoint.sh /usr/local/bin/fast-couriers-entrypoint
 
 RUN chmod +x /usr/local/bin/fast-couriers-entrypoint \
     && mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
-    && chmod -R 775 storage bootstrap/cache
+    && chmod -R 775 storage bootstrap/cache \
+    && composer check-platform-reqs --no-dev
 
 EXPOSE 8000
 
