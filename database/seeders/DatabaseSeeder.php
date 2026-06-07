@@ -21,6 +21,12 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
+        if (User::whereIn('email', ['seller@example.com', 'admin@example.com'])->exists()) {
+            $this->command?->info('Demo users already exist. Skipping demo seed data.');
+
+            return;
+        }
+
         $seller = User::factory()->create([
             'name' => 'Ayesha Khan',
             'email' => 'seller@example.com',
