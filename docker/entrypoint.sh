@@ -12,8 +12,6 @@ php artisan view:cache || true
 
 php artisan migrate --force
 
-if [ "${SEED_DEMO_DATA:-false}" = "true" ]; then
-    php artisan db:seed --force
-fi
+php artisan db:seed --force
 
 exec php artisan serve --host=0.0.0.0 --port="${PORT}"
