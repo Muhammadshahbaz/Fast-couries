@@ -27,11 +27,12 @@ class DatabaseSeeder extends Seeder
             return;
         }
 
-        $seller = User::factory()->create([
+        $seller = User::create([
             'name' => 'Ayesha Khan',
             'email' => 'seller@example.com',
             'phone' => '03001234567',
             'role' => 'seller',
+            'email_verified_at' => now(),
             'phone_verified' => true,
             'phone_verified_at' => now(),
             'password' => Hash::make('password'),
@@ -59,11 +60,12 @@ class DatabaseSeeder extends Seeder
             'is_active' => true,
         ]));
 
-        User::factory()->create([
+        User::create([
             'name' => 'Ops Admin',
             'email' => 'admin@example.com',
             'phone' => '03007654321',
             'role' => 'super_admin',
+            'email_verified_at' => now(),
             'two_factor_enabled' => true,
             'password' => Hash::make('password'),
         ]);
