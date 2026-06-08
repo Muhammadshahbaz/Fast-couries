@@ -17,48 +17,54 @@ class DashboardController extends Controller
         $user = $request->user();
         $profile = $user->sellerProfile;
         $shipments = Shipment::query()
-            ->with(['courier:id,name,code', 'city:id,name'])
-            ->where('seller_id', $user->id);
+            ->with(['courier:id,name,code', 'city:id,name', 'payoutInvoices:id'])
+            ->where('seller_id', $user->id)
+            ->latest('booked_at')
+            ->get();
+        $recentBookings = $shipments->take(10);
+        $inventoryProducts = InventoryProduct::query()
+            ->where('seller_id', $user->id)
+            ->get();
+        $orders = Order::query()
+            ->where('seller_id', $user->id)
+            ->get();
 
-        $today = now()->startOfDay();
-        $todayShipments = (clone $shipments)->where('booked_at', '>=', $today);
-        $recentBookings = (clone $shipments)->latest('booked_at')->limit(10)->get();
-        $inventoryProducts = InventoryProduct::query()->where('seller_id', $user->id);
-        $orders = Order::query()->where('seller_id', $user->id);
+        $today = today();
+        $isSameDay = fn ($date, $day): bool => $date !== null && $date->isSameDay($day);
 
-        $lastSevenDays = collect(range(6, 0))->map(function (int $daysAgo) use ($shipments) {
+        $lastSevenDays = collect(range(6, 0))->map(function (int $daysAgo) use ($shipments, $isSameDay) {
             $date = now()->subDays($daysAgo);
 
             return [
                 'label' => $date->format('D'),
-                'booked' => (clone $shipments)->whereDate('booked_at', $date)->count(),
-                'delivered' => (clone $shipments)->whereDate('delivered_at', $date)->count(),
+                'booked' => $shipments->filter(fn (Shipment $shipment) => $isSameDay($shipment->booked_at, $date))->count(),
+                'delivered' => $shipments->filter(fn (Shipment $shipment) => $isSameDay($shipment->delivered_at, $date))->count(),
             ];
         });
 
-        $deliveredCount = (clone $shipments)->where('status', 'delivered')->count();
-        $returnedCount = (clone $shipments)->where('status', 'returned')->count();
-        $pendingDeliveries = (clone $shipments)->whereIn('status', ['booked', 'picked', 'transit', 'out_for_delivery'])->count();
-        $lowStockProducts = (clone $inventoryProducts)
-            ->whereColumn('stock_on_hand', '<=', 'low_stock_alert')
+        $deliveredCount = $shipments->where('status', 'delivered')->count();
+        $returnedCount = $shipments->where('status', 'returned')->count();
+        $pendingDeliveries = $shipments->whereIn('status', ['booked', 'picked', 'transit', 'out_for_delivery'])->count();
+        $lowStockProducts = $inventoryProducts
+            ->filter(fn (InventoryProduct $product) => $product->stock_on_hand <= $product->low_stock_alert)
             ->count();
 
         return Inertia::render('Dashboard', [
             'stats' => [
-                'bookingsToday' => (clone $todayShipments)->count(),
-                'deliveredToday' => (clone $shipments)->whereDate('delivered_at', today())->count(),
+                'bookingsToday' => $shipments->filter(fn (Shipment $shipment) => $isSameDay($shipment->booked_at, $today))->count(),
+                'deliveredToday' => $shipments->filter(fn (Shipment $shipment) => $isSameDay($shipment->delivered_at, $today))->count(),
                 'pendingDeliveries' => $pendingDeliveries,
-                'returnsToday' => (clone $shipments)->whereDate('returned_at', today())->count(),
-                'codCollectedToday' => (clone $shipments)->whereDate('delivered_at', today())->sum('cod_amount_paisa'),
-                'codPaidToday' => (int) round((clone $shipments)->whereDate('delivered_at', today())->sum('cod_amount_paisa') * 0.96),
-                'codReadyForInvoice' => (clone $shipments)
-                    ->where('status', 'delivered')
-                    ->where('cod_amount_paisa', '>', 0)
-                    ->whereDoesntHave('payoutInvoices')
+                'returnsToday' => $shipments->filter(fn (Shipment $shipment) => $isSameDay($shipment->returned_at, $today))->count(),
+                'codCollectedToday' => $shipments->filter(fn (Shipment $shipment) => $isSameDay($shipment->delivered_at, $today))->sum('cod_amount_paisa'),
+                'codPaidToday' => (int) round($shipments->filter(fn (Shipment $shipment) => $isSameDay($shipment->delivered_at, $today))->sum('cod_amount_paisa') * 0.96),
+                'codReadyForInvoice' => $shipments
+                    ->filter(fn (Shipment $shipment) => $shipment->status === 'delivered'
+                        && $shipment->cod_amount_paisa > 0
+                        && $shipment->payoutInvoices->isEmpty())
                     ->sum('cod_amount_paisa'),
-                'inventoryUnits' => (clone $inventoryProducts)->sum('stock_on_hand'),
+                'inventoryUnits' => $inventoryProducts->sum('stock_on_hand'),
                 'lowStockProducts' => $lowStockProducts,
-                'pendingOrders' => (clone $orders)->whereIn('status', ['pending', 'packed'])->count(),
+                'pendingOrders' => $orders->whereIn('status', ['pending', 'packed'])->count(),
             ],
             'onboarding' => [
                 [
@@ -86,21 +92,21 @@ class DashboardController extends Controller
                 [
                     'label' => 'First booking created',
                     'description' => 'Create a shipment and compare couriers by cost, speed, and success rate.',
-                    'done' => (clone $shipments)->exists(),
+                    'done' => $shipments->isNotEmpty(),
                     'href' => route('bookings.create'),
                     'action' => 'Book shipment',
                 ],
                 [
                     'label' => 'Inventory product added',
                     'description' => 'Add products and SKUs so weights and stock can connect to booking.',
-                    'done' => (clone $inventoryProducts)->exists(),
+                    'done' => $inventoryProducts->isNotEmpty(),
                     'href' => route('inventory.index'),
                     'action' => 'Add product',
                 ],
                 [
                     'label' => 'COD payout ready',
                     'description' => 'Review delivered COD parcels and generate a payout invoice.',
-                    'done' => (clone $shipments)->where('status', 'delivered')->where('cod_amount_paisa', '>', 0)->exists()
+                    'done' => $shipments->contains(fn (Shipment $shipment) => $shipment->status === 'delivered' && $shipment->cod_amount_paisa > 0)
                         && (filled($profile?->bank_account_number) || filled($profile?->wallet_number)),
                     'href' => route('payouts.index'),
                     'action' => 'Review payouts',
@@ -118,23 +124,24 @@ class DashboardController extends Controller
 
                     return [
                         'label' => $start->format('M d'),
-                        'revenue' => (clone $shipments)
-                            ->whereBetween('delivered_at', [$start, $end])
+                        'revenue' => $shipments
+                            ->filter(fn (Shipment $shipment) => $shipment->delivered_at !== null
+                                && $shipment->delivered_at->betweenIncluded($start, $end))
                             ->sum('cod_amount_paisa'),
                     ];
                 }),
-                'topCities' => (clone $shipments)
-                    ->selectRaw('city_id, count(*) as total, sum(case when status = ? then 1 else 0 end) as delivered', ['delivered'])
-                    ->with('city:id,name')
+                'topCities' => $shipments
                     ->groupBy('city_id')
-                    ->orderByDesc('total')
-                    ->limit(5)
-                    ->get()
-                    ->map(fn (Shipment $shipment) => [
-                        'city' => $shipment->city?->name ?? 'Unknown',
-                        'total' => (int) $shipment->total,
-                        'successRate' => $shipment->total > 0 ? round(($shipment->delivered / $shipment->total) * 100) : 0,
-                    ]),
+                    ->map(fn ($cityShipments) => [
+                        'city' => $cityShipments->first()->city?->name ?? 'Unknown',
+                        'total' => $cityShipments->count(),
+                        'successRate' => $cityShipments->count() > 0
+                            ? round(($cityShipments->where('status', 'delivered')->count() / $cityShipments->count()) * 100)
+                            : 0,
+                    ])
+                    ->sortByDesc('total')
+                    ->take(5)
+                    ->values(),
             ],
             'recentBookings' => $recentBookings->map(fn (Shipment $shipment) => [
                 'trackingNumber' => $shipment->tracking_number,
